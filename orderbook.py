@@ -1,54 +1,89 @@
 
-"""Manage advance customer orders."""
+"""Validate, store and select advance customer orders."""
 
 from order import Order
 
+
 class OrderBook:
-    """Store and manage advance customer orders."""
+    """Own the complete, validated batch of orders for one simulation."""
 
-    def __init__(self, duration=12):
-        if (
-            isinstance(duration, bool)
-            or not isinstance(duration, int)
-            or duration < 1
-        ):
-            raise ValueError("duration must be a positive integer")
+    REQUIRED_FIELDS = {"id", "product_id", "quantity", "collection_week"}
 
-        self.duration = duration
-        self.orders = []
+    def __init__(self, records, duration):
+        if type(duration) is not int or not 1 <= duration <= 12:
+            raise ValueError("duration must be an integer from 1 to 12")
 
-    def add_order(self, order):
-        """Add an Order instance or dictionary."""
+        if not isinstance(records, list):
+            raise ValueError("orders must be a list")
 
-        if isinstance(order, dict):
-            try:
-                order = Order(
-                    id=order["id"],
-                    product_id=order["product_id"],
-                    quantity=order["quantity"],
-                    collection_week=order["collection_week"]
-                )
-            except KeyError as exc:
+        # Validate the complete batch before accepting any orders.
+        validated_orders = []
+        seen_ids = set()
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("each order record must be an object")
+
+            if set(record) != self.REQUIRED_FIELDS:
                 raise ValueError(
-                    f"missing order field: {exc.args[0]}"
-                ) from exc
+                    "each order must contain exactly id, product_id, "
+                    "quantity and collection_week"
+                )
 
-        if not isinstance(order, Order):
-            raise ValueError("order must be an Order instance")
-
-        if any(existing.id == order.id for existing in self.orders):
-            raise ValueError("duplicate order ID")
-
-        if order.collection_week > self.duration:
-            raise ValueError(
-                "collection week exceeds simulation duration"
+            order = Order(
+                record["id"],
+                record["product_id"],
+                record["quantity"],
+                record["collection_week"],
             )
 
-        self.orders.append(order)
-        return order
+            if order.collection_week > duration:
+                raise ValueError(
+                    "collection week exceeds simulation duration"
+                )
+
+            if order.id in seen_ids:
+                raise ValueError("duplicate order ID")
+
+            seen_ids.add(order.id)
+            validated_orders.append(order)
+
+        self.duration = duration
+        self.orders = validated_orders
+
+    def due_orders(self, week):
+        """Return pending orders due this week in ascending ID order."""
+
+        if type(week) is not int or not 1 <= week <= self.duration:
+            raise ValueError("week is outside the simulation duration")
+
+        return sorted(
+            (
+                order for order in self.orders
+                if order.status == "pending"
+                and order.collection_week == week
+            ),
+            key=lambda order: order.id,
+        )
+
+    def mark_fulfilled(self, order):
+        """Mark an owned pending order as fulfilled."""
+
+        if order not in self.orders:
+            raise ValueError("order does not belong to this order book")
+
+        order.mark_fulfilled()
+
+    def mark_missed(self, order):
+        """Mark an owned pending order as missed."""
+
+        if order not in self.orders:
+            raise ValueError("order does not belong to this order book")
+
+        order.mark_missed()
 
     def get_order(self, order_id):
-        """Find an order by ID."""
+        """Return the order with the supplied ID."""
 
         for order in self.orders:
             if order.id == order_id:
@@ -56,80 +91,5 @@ class OrderBook:
 
         raise ValueError("order not found")
 
-    def get_orders(self):
-        """Return all orders in ascending ID order."""
-
-        return sorted(self.orders, key=lambda order: order.id)
-
-    def get_pending_orders(self, collection_week=None):
-        """Return pending orders."""
-
-        result = [
-            order for order in self.orders
-            if order.status == "pending"
-            and (
-                collection_week is None
-                or order.collection_week == collection_week
-            )
-        ]
-
-        return sorted(result, key=lambda order: order.id)
-
-    def get_fulfilled_orders(self):
-        """Return fulfilled orders."""
-
-        return sorted(
-            [
-                order for order in self.orders
-                if order.status == "fulfilled"
-            ],
-            key=lambda order: order.id
-        )
-
-    def get_missed_orders(self):
-        """Return missed orders."""
-
-        return sorted(
-            [
-                order for order in self.orders
-                if order.status == "missed"
-            ],
-            key=lambda order: order.id
-        )
-
-    def fulfil_order(self, order_id):
-        """Mark an order as fulfilled."""
-
-        self.get_order(order_id).mark_fulfilled()
-
-    def fulfill_order(self, order_id):
-        """US spelling alias."""
-
-        self.fulfil_order(order_id)
-
-    def miss_order(self, order_id):
-        """Mark an order as missed."""
-
-        self.get_order(order_id).mark_missed()
-
-    def process_week(self, week):
-        """Return pending orders due in the specified week."""
-
-        if (
-            isinstance(week, bool)
-            or not isinstance(week, int)
-            or week < 1
-            or week > self.duration
-        ):
-            raise ValueError("week is outside the simulation duration")
-
-        return self.get_pending_orders(week)
-
     def __len__(self):
         return len(self.orders)
-
-    def __repr__(self):
-        return (
-            f"OrderBook(duration={self.duration}, "
-            f"orders={len(self.orders)})"
-        )

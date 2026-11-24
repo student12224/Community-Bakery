@@ -11,7 +11,7 @@ class Issue2ValidationTests(unittest.TestCase):
 
         bakery = Bakery(
             duration=2,
-            initial_cash=100000,
+            initial_cash=15000,
             initial_stock={
                 "flour": 1000,
                 "butter": 400,
@@ -50,32 +50,18 @@ class Issue2ValidationTests(unittest.TestCase):
             bakery.step(decision, demand)
 
         # Verify that no simulation state has changed.
-        self.assertEqual(
-            bakery.get_stock(), original_stock
-        )
-
-        self.assertEqual(
-            bakery.get_cash(), original_cash
-        )
-
-        self.assertEqual(
-            bakery.week, original_week
-        )
-
-        self.assertEqual(
-            bakery.get_history(), original_history
-        )
-
-        self.assertEqual(
-            bakery.bankrupt, original_bankrupt
-        )
+        self.assertEqual(bakery.get_stock(), original_stock)
+        self.assertEqual(bakery.get_cash(), original_cash)
+        self.assertEqual(bakery.week, original_week)
+        self.assertEqual(bakery.get_history(), original_history)
+        self.assertEqual(bakery.bankrupt, original_bankrupt)
 
     def test_unaffordable_purchase_is_rejected(self):
         """Purchases must not exceed available cash."""
 
         bakery = Bakery(
             duration=2,
-            initial_cash=10000,
+            initial_cash=15000,
             initial_stock={
                 "flour": 0,
                 "butter": 0,
@@ -85,6 +71,9 @@ class Issue2ValidationTests(unittest.TestCase):
 
         original_stock = bakery.get_stock().copy()
         original_cash = bakery.get_cash()
+        original_week = bakery.week
+        original_history = bakery.get_history()
+        original_bankrupt = bakery.bankrupt
 
         decision = {
             "workforce": 1,
@@ -106,21 +95,22 @@ class Issue2ValidationTests(unittest.TestCase):
             "slice": 10
         }
 
-        # Flour costs 6000 pence, but only 5000
-        # pence remains after weekly rent.
+        # Initial cash: 15000
+        # Workforce cost: 10000
+        # Weekly rent: 5000
+        # Cash available for purchases: 0
+        # Flour purchase cost: 6000
+        # Therefore, the purchase is unaffordable.
+
         with self.assertRaises(ValueError):
             bakery.step(decision, demand)
 
-        self.assertEqual(
-            bakery.get_stock(), original_stock
-        )
-
-        self.assertEqual(
-            bakery.get_cash(), original_cash
-        )
-
-        self.assertEqual(bakery.week, 1)
-        self.assertEqual(bakery.get_history(), [])
+        # Verify complete state preservation.
+        self.assertEqual(bakery.get_stock(), original_stock)
+        self.assertEqual(bakery.get_cash(), original_cash)
+        self.assertEqual(bakery.week, original_week)
+        self.assertEqual(bakery.get_history(), original_history)
+        self.assertEqual(bakery.bankrupt, original_bankrupt)
 
 
 if __name__ == "__main__":

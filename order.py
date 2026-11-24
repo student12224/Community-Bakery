@@ -5,38 +5,25 @@ from product import PRODUCTS
 
 
 class Order:
-    """Represent one customer's advance order."""
+    """Represent one customer's advance order and its current status."""
 
     VALID_STATUSES = {"pending", "fulfilled", "missed"}
 
     def __init__(self, id, product_id, quantity, collection_week):
-
-        if not isinstance(id, str):
-            raise ValueError("order ID must be a string")
-
-        if not id or not id.strip():
-            raise ValueError("order ID cannot be empty")
+        if not isinstance(id, str) or not id or not id.strip():
+            raise ValueError("order ID must be a non-empty string")
 
         if id != id.strip():
-            raise ValueError("order ID cannot contain surrounding whitespace")
+            raise ValueError("order ID must not have surrounding whitespace")
 
-        if not isinstance(product_id, str):
-            raise ValueError("product ID must be a string")
-
-        if product_id not in PRODUCTS:
+        if not isinstance(product_id, str) or product_id not in PRODUCTS:
             raise ValueError("invalid product ID")
 
-        if isinstance(quantity, bool) or not isinstance(quantity, int):
-            raise ValueError("quantity must be an integer")
+        if type(quantity) is not int or quantity <= 0:
+            raise ValueError("quantity must be a positive integer")
 
-        if quantity <= 0:
-            raise ValueError("quantity must be positive")
-
-        if isinstance(collection_week, bool) or not isinstance(collection_week, int):
-            raise ValueError("collection week must be an integer")
-
-        if collection_week < 1:
-            raise ValueError("collection week must be at least 1")
+        if type(collection_week) is not int or not 1 <= collection_week <= 12:
+            raise ValueError("collection week must be an integer from 1 to 12")
 
         self.id = id
         self.product_id = product_id
@@ -45,26 +32,20 @@ class Order:
         self.status = "pending"
 
     def mark_fulfilled(self):
-        """Mark a pending order as fulfilled."""
-
+        """Change a pending order to fulfilled."""
         if self.status != "pending":
             raise ValueError("only pending orders can be fulfilled")
-
         self.status = "fulfilled"
 
     def mark_missed(self):
-        """Mark a pending order as missed."""
-
+        """Change a pending order to missed."""
         if self.status != "pending":
-            raise ValueError("only pending orders can be missed")
-
+            raise ValueError("only pending orders can be marked missed")
         self.status = "missed"
 
     def __repr__(self):
         return (
-            f"Order(id={self.id!r}, "
-            f"product_id={self.product_id!r}, "
-            f"quantity={self.quantity}, "
-            f"collection_week={self.collection_week}, "
+            f"Order(id={self.id!r}, product_id={self.product_id!r}, "
+            f"quantity={self.quantity}, collection_week={self.collection_week}, "
             f"status={self.status!r})"
         )

@@ -9,8 +9,9 @@ from validation import integer, validate_decision
 from stock import Stock
 from orderbook import OrderBook
 
+
 class Bakery:
-    """A bounded simulation with stock, cash, orders and weekly records."""
+    """A bounded simulation with stock, cash, advance orders and weekly records."""
 
     WEEKLY_RENT = 5000
     COST_PER_WORKER = 10000
@@ -27,204 +28,183 @@ class Bakery:
         self._cash = integer(initial_cash, "initial_cash")
         self.stock = Stock(initial_stock)
 
-        self.order_book = OrderBook(self.duration)
-        self.orderbook = self.order_book
-
-        if orders is not None:
-            for order in orders:
-                self.order_book.add_order(order)
+        order_records = [] if orders is None else orders
+        self.order_book = OrderBook(order_records, self.duration)
 
         self.week = 1
         self.bankrupt = False
         self._history = []
 
     def get_stock(self):
+        """Return the live stock dictionary."""
         return self.stock.quantities
 
     def get_cash(self):
+        """Return the current cash balance in pence."""
         return self._cash
 
     def get_history(self):
+        """Return independent snapshots of completed weekly records."""
         return deepcopy(self._history)
 
-    def get_orderbook(self):
-        return self.order_book
-
     def is_stopped(self):
+        """Return whether bankruptcy or duration stopped trading."""
         return self.bankrupt or self.week > self.duration
 
     def step(self, decision, demand):
-        """Validate and apply one complete trading week."""
+        """Validate and commit one complete week, including due advance orders."""
 
         if self.is_stopped():
             raise ValueError("simulation has stopped")
 
-        workforce, sales, purchases = validate_decision(
-            decision, demand
-        )
+        # Validate the entire walk-in decision before changing state.
+        workforce, sales, purchases = validate_decision(decision, demand)
 
         opening_stock = dict(self.stock.quantities)
         opening_cash = self._cash
+        labour_available = workforce * self.MINUTES_PER_WORKER
 
-        due_orders = self.order_book.process_week(self.week)
-
+        # Keep all order outcomes provisional until the complete
+        # weekly decision, including purchases, has been validated.
         fulfilled_orders = []
         missed_orders = []
-
         order_sales = dict.fromkeys(PRODUCTS, 0)
+        remaining_stock = dict(opening_stock)
 
-        # Walk-in ingredient consumption.
+        # Advance orders have priority over walk-in sales.
+        for order in self.order_book.due_orders(self.week):
+
+            product = PRODUCTS[order.product_id]
+            needed_minutes = product.minutes * order.quantity
+
+            needed_ingredients = {
+                ingredient: (
+                    product.quantity_for(INGREDIENTS[ingredient])
+                    * order.quantity
+                )
+                for ingredient in INGREDIENTS
+            }
+
+            can_make = (
+                needed_minutes <= labour_available
+                and all(
+                    needed_ingredients[name] <= remaining_stock[name]
+                    for name in INGREDIENTS
+                )
+            )
+
+            if can_make:
+                fulfilled_orders.append(order)
+                order_sales[order.product_id] += order.quantity
+                labour_available -= needed_minutes
+
+                for name in INGREDIENTS:
+                    remaining_stock[name] -= needed_ingredients[name]
+
+            else:
+                # A missed order consumes no resources.
+                missed_orders.append(order)
+
+        # Validate all walk-in production against resources remaining
+        # after advance orders have been considered.
+        walk_in_minutes = sum(
+            PRODUCTS[product_id].minutes * sales[product_id]
+            for product_id in PRODUCTS
+        )
+
+        if walk_in_minutes > labour_available:
+            raise ValueError("insufficient labour")
+
         walk_in_consumed = {
             ingredient: sum(
-                PRODUCTS[product].quantity_for(
+                PRODUCTS[product_id].quantity_for(
                     INGREDIENTS[ingredient]
-                ) * sales[product]
-                for product in PRODUCTS
+                ) * sales[product_id]
+                for product_id in PRODUCTS
             )
             for ingredient in INGREDIENTS
         }
 
         if any(
-            walk_in_consumed[ingredient] > opening_stock[ingredient]
-            for ingredient in INGREDIENTS
+            walk_in_consumed[name] > remaining_stock[name]
+            for name in INGREDIENTS
         ):
             raise ValueError("insufficient ingredients")
 
-        remaining = {
-            ingredient: (
-                opening_stock[ingredient] - walk_in_consumed[ingredient]
+        for name in INGREDIENTS:
+            remaining_stock[name] -= walk_in_consumed[name]
+
+        # Calculate total ingredient consumption.
+        order_consumed = {
+            ingredient: sum(
+                PRODUCTS[product_id].quantity_for(
+                    INGREDIENTS[ingredient]
+                ) * order_sales[product_id]
+                for product_id in PRODUCTS
             )
             for ingredient in INGREDIENTS
-        }
-
-        # Walk-in labour.
-        walk_in_minutes = sum(
-            PRODUCTS[product].minutes * sales[product]
-            for product in PRODUCTS
-        )
-
-        labour_capacity = workforce * self.MINUTES_PER_WORKER
-
-        if walk_in_minutes > labour_capacity:
-            raise ValueError("insufficient labour")
-
-        remaining_labour = labour_capacity - walk_in_minutes
-
-        # Process advance orders in ascending ID order.
-        for order in sorted(due_orders, key=lambda item: item.id):
-
-            product = PRODUCTS[order.product_id]
-            quantity = order.quantity
-
-            required_minutes = product.minutes * quantity
-
-            required_ingredients = {
-                ingredient: (
-                    product.quantity_for(INGREDIENTS[ingredient])
-                    * quantity
-                )
-                for ingredient in INGREDIENTS
-            }
-
-            enough_stock = all(
-                required_ingredients[ingredient] <= remaining[ingredient]
-                for ingredient in INGREDIENTS
-            )
-
-            enough_labour = required_minutes <= remaining_labour
-
-            if enough_stock and enough_labour:
-                fulfilled_orders.append(order)
-                order_sales[order.product_id] += quantity
-
-                for ingredient in INGREDIENTS:
-                    remaining[ingredient] -= (
-                        required_ingredients[ingredient]
-                    )
-
-                remaining_labour -= required_minutes
-            else:
-                missed_orders.append(order)
-
-        # Total production and consumption.
-        total_sales = {
-            product: sales[product] + order_sales[product]
-            for product in PRODUCTS
         }
 
         consumed = {
             ingredient: (
-                walk_in_consumed[ingredient]
-                + sum(
-                    PRODUCTS[product].quantity_for(
-                        INGREDIENTS[ingredient]
-                    ) * order_sales[product]
-                    for product in PRODUCTS
-                )
+                order_consumed[ingredient] + walk_in_consumed[ingredient]
             )
             for ingredient in INGREDIENTS
         }
 
-        minutes = (
-            walk_in_minutes
-            + sum(
-                PRODUCTS[product].minutes * order_sales[product]
-                for product in PRODUCTS
-            )
+        # Calculate total production minutes.
+        order_minutes = sum(
+            PRODUCTS[product_id].minutes * order_sales[product_id]
+            for product_id in PRODUCTS
         )
 
-        # Separate revenue calculations.
-        walk_in_revenue = sum(
-            PRODUCTS[product].price * sales[product]
-            for product in PRODUCTS
-        )
+        minutes_used = order_minutes + walk_in_minutes
 
+        # Calculate separate revenue streams.
         order_revenue = sum(
-            PRODUCTS[product].price * order_sales[product]
-            for product in PRODUCTS
+            PRODUCTS[product_id].price * order_sales[product_id]
+            for product_id in PRODUCTS
         )
 
-        revenue = walk_in_revenue + order_revenue
-
-        wages = (
-            workforce * self.COST_PER_WORKER
-            if revenue
-            else 0
+        walk_in_revenue = sum(
+            PRODUCTS[product_id].price * sales[product_id]
+            for product_id in PRODUCTS
         )
 
+        revenue = order_revenue + walk_in_revenue
+
+        # The full workforce is paid even when there are no sales.
+        wages = workforce * self.COST_PER_WORKER
         rent = self.WEEKLY_RENT
 
-        cash_after_charges = (
-            opening_cash + revenue - wages - rent
-        )
-
+        cash_after_charges = opening_cash + revenue - wages - rent
         bankrupt = cash_after_charges < 0
 
-        # Spoilage and purchase calculations.
         discarded = dict.fromkeys(INGREDIENTS, 0)
         purchased = dict.fromkeys(INGREDIENTS, 0)
         purchases_cost = 0
 
         if not bankrupt:
-            discarded = self.stock.discarded(remaining)
 
-            remaining = {
-                ingredient: (
-                    remaining[ingredient] - discarded[ingredient]
-                )
-                for ingredient in INGREDIENTS
+            # Apply weekly spoilage after production.
+            discarded = self.stock.discarded(remaining_stock)
+
+            after_loss = {
+                name: remaining_stock[name] - discarded[name]
+                for name in INGREDIENTS
             }
 
+            # Purchases arrive at the end of the week.
             if any(
-                remaining[ingredient] + purchases[ingredient]
-                > INGREDIENTS[ingredient].capacity
-                for ingredient in INGREDIENTS
+                after_loss[name] + purchases[name]
+                > INGREDIENTS[name].capacity
+                for name in INGREDIENTS
             ):
                 raise ValueError("purchase exceeds capacity")
 
             purchases_cost = sum(
-                INGREDIENTS[ingredient].price * purchases[ingredient]
-                for ingredient in INGREDIENTS
+                INGREDIENTS[name].price * purchases[name]
+                for name in INGREDIENTS
             )
 
             if purchases_cost > cash_after_charges:
@@ -232,40 +212,37 @@ class Bakery:
 
             purchased = dict(purchases)
 
-            remaining = {
-                ingredient: (
-                    remaining[ingredient] + purchased[ingredient]
-                )
-                for ingredient in INGREDIENTS
+            closing_stock = {
+                name: after_loss[name] + purchased[name]
+                for name in INGREDIENTS
             }
+
+        else:
+            # Bankruptcy skips spoilage and purchases.
+            # Purchase quantities have already passed type validation.
+            closing_stock = remaining_stock
 
         closing_cash = cash_after_charges - purchases_cost
 
-        # Commit state only after validation.
-        self.stock.update(remaining)
+        # Commit all state only after every rejection condition is checked.
+        self.stock.update(closing_stock)
         self._cash = closing_cash
         self.bankrupt = bankrupt
 
         for order in fulfilled_orders:
-            self.order_book.fulfil_order(order.id)
+            self.order_book.mark_fulfilled(order)
 
         for order in missed_orders:
-            self.order_book.miss_order(order.id)
+            self.order_book.mark_missed(order)
 
-        # History record.
-        fulfilled_ids = [
-            order.id for order in fulfilled_orders
-        ]
-
-        missed_ids = [
-            order.id for order in missed_orders
-        ]
+        fulfilled_ids = [order.id for order in fulfilled_orders]
+        missed_ids = [order.id for order in missed_orders]
 
         record = {
             "week": self.week,
+            "workforce": workforce,
             "opening_cash": opening_cash,
             "closing_cash": self._cash,
-            "workforce": workforce,
 
             "revenue": revenue,
             "walk_in_revenue": walk_in_revenue,
@@ -275,9 +252,8 @@ class Bakery:
             "rent": rent,
             "purchases_cost": purchases_cost,
 
+            # Sales records walk-in quantities only.
             "sales": dict(sales),
-            "order_sales": dict(order_sales),
-            "total_sales": dict(total_sales),
 
             "opening_stock": dict(opening_stock),
             "consumed": dict(consumed),
@@ -285,17 +261,11 @@ class Bakery:
             "purchased": dict(purchased),
             "closing_stock": dict(self.stock.quantities),
 
-            "minutes_used": minutes,
-
-            # Stage 2 order history fields.
-            "fulfilled_order_ids": list(fulfilled_ids),
-            "missed_order_ids": list(missed_ids),
-
-            # Backward-compatible aliases.
-            "fulfilled_orders": list(fulfilled_ids),
-            "missed_orders": list(missed_ids),
-
+            "minutes_used": minutes_used,
             "bankrupt": bankrupt,
+
+            "fulfilled_order_ids": fulfilled_ids,
+            "missed_order_ids": missed_ids,
         }
 
         self._history.append(record)
